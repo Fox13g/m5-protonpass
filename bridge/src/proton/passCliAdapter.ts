@@ -5,6 +5,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import type { BridgeConfig } from '../config.js';
 import type { OutboxMutation, VaultCredentialRecord } from '../crypto/vaultBuilder.js';
+import { importProtonPassFile } from './protonExportImporter.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -50,15 +51,24 @@ export class PassCliAdapter {
   }
 
   private buildEnv(): NodeJS.ProcessEnv {
-    const env: NodeJS.ProcessEnv = { ...process.env };
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PROTON_PASS_KEY_PROVIDER: process.env.PROTON_PASS_KEY_PROVIDER || 'fs',
+      PROTON_PASS_NO_UPDATE_CHECK: '1',
+    };
     if (this.cfg.PROTON_PASS_PAT) {
       env.PROTON_PASS_PAT = this.cfg.PROTON_PASS_PAT;
+      env.PROTON_PASS_PERSONAL_ACCESS_TOKEN = this.cfg.PROTON_PASS_PAT;
     }
     return env;
   }
 
   private getAllowedVaultFilterSet(): Set<string> {
-    if (!this.cfg.ALLOWED_VAULTS || !this.cfg.ALLOWED_VAULTS.trim()) {
+    if (
+      !this.cfg.ALLOWED_VAULTS ||
+      !this.cfg.ALLOWED_VAULTS.trim() ||
+      this.cfg.ALLOWED_VAULTS.trim() === 'Personal,Work'
+    ) {
       return new Set();
     }
     return new Set(
@@ -69,14 +79,36 @@ export class PassCliAdapter {
   }
 
   /**
-   * Lista os cofres (Vaults) disponíveis no Proton Pass via `pass-cli vault list --output json`.
+   * Lista os cofres (Vaults) disponíveis no Proton Pass via `pass-cli vault list --output json`
+   * ou a partir do snapshot importado em `fallback_vault_items.json`.
    */
   async listVaults(): Promise<ProtonVaultSummary[]> {
+    if (fs.existsSync(this.localFallbackPath)) {
+      try {
+        const cached = JSON.parse(
+          fs.readFileSync(this.localFallbackPath, 'utf8')
+        ) as VaultCredentialRecord[];
+        if (cached.length > 0) {
+          const counts = new Map<string, number>();
+          for (const item of cached) {
+            counts.set(item.vaultId, (counts.get(item.vaultId) ?? 0) + 1);
+          }
+          return Array.from(counts.entries()).map(([name, itemCount]) => ({
+            vaultId: name,
+            name,
+            itemCount,
+          }));
+        }
+      } catch {
+        // Prossegue para pass-cli
+      }
+    }
+
     try {
       const { stdout } = await execFileAsync(
         this.cfg.PASS_CLI_BIN,
         ['vault', 'list', '--output', 'json'],
-        { env: this.buildEnv(), timeout: 25_000, maxBuffer: 16 * 1024 * 1024 }
+        { env: this.buildEnv(), timeout: 8_000, maxBuffer: 16 * 1024 * 1024 }
       );
       const parsed = JSON.parse(stdout);
       const rawVaults: Record<string, unknown>[] = Array.isArray(parsed)
@@ -101,13 +133,39 @@ export class PassCliAdapter {
    */
   async fetchCredentials(): Promise<VaultCredentialRecord[]> {
     const allowedSet = this.getAllowedVaultFilterSet();
+    const sessionFile = '/home/sentinel/.local/share/proton-pass-cli/.session/session.json';
+
+    if (
+      this.cfg.PASS_CLI_BIN === 'pass-cli' &&
+      !this.cfg.PROTON_PASS_PAT &&
+      !fs.existsSync(sessionFile) &&
+      fs.existsSync(this.localFallbackPath)
+    ) {
+      const raw = fs.readFileSync(this.localFallbackPath, 'utf8');
+      const cached = JSON.parse(raw) as VaultCredentialRecord[];
+      return cached.filter((item) => {
+        if (allowedSet.size === 0) return true;
+        return allowedSet.has(item.vaultId.toLowerCase());
+      });
+    }
 
     try {
-      const { stdout } = await execFileAsync(
-        this.cfg.PASS_CLI_BIN,
-        ['item', 'list', '--output', 'json'],
-        { env: this.buildEnv(), timeout: 30_000, maxBuffer: 32 * 1024 * 1024 }
-      );
+      let stdout = '';
+      try {
+        const res = await execFileAsync(
+          this.cfg.PASS_CLI_BIN,
+          ['item', 'list', '--output', 'json', '--show-secrets'],
+          { env: this.buildEnv(), timeout: 30_000, maxBuffer: 32 * 1024 * 1024 }
+        );
+        stdout = res.stdout;
+      } catch {
+        const res = await execFileAsync(
+          this.cfg.PASS_CLI_BIN,
+          ['item', 'list', '--output', 'json'],
+          { env: this.buildEnv(), timeout: 30_000, maxBuffer: 32 * 1024 * 1024 }
+        );
+        stdout = res.stdout;
+      }
 
       const parsed = JSON.parse(stdout);
       const rawItems: Record<string, unknown>[] = Array.isArray(parsed)
@@ -164,6 +222,7 @@ export class PassCliAdapter {
       this.saveLocalFallback(normalized);
       return normalized;
     } catch (err) {
+      this.tryAutoImportFromProvisionDir();
       if (fs.existsSync(this.localFallbackPath)) {
         const raw = fs.readFileSync(this.localFallbackPath, 'utf8');
         const cached = JSON.parse(raw) as VaultCredentialRecord[];
@@ -173,8 +232,34 @@ export class PassCliAdapter {
         });
       }
       throw new Error(
-        `Falha ao executar pass-cli (${(err as Error).message}). Verifique 'docker compose exec -it sentinel-bridge pass-cli login'.`
+        `Falha ao executar pass-cli (${(err as Error).message}). Para contas Proton Free, exporte o cofre em Settings -> Export (.zip/.json/.csv), coloque em ./provision-out/ e rode 'docker exec -it sentinel-bridge npm run import'.`
       );
+    }
+  }
+
+  private tryAutoImportFromProvisionDir(): void {
+    try {
+      const dir = this.cfg.PROVISION_OUT_DIR;
+      if (!fs.existsSync(dir)) return;
+      const ignored = new Set([
+        'cardputer_provision.json',
+        'fallback_vault_items.json',
+        'bridge_state.json',
+      ]);
+      for (const entry of fs.readdirSync(dir)) {
+        if (ignored.has(entry)) continue;
+        const lower = entry.toLowerCase();
+        if (lower.endsWith('.zip') || lower.endsWith('.json') || lower.endsWith('.csv')) {
+          const fullPath = path.join(dir, entry);
+          const imported = importProtonPassFile(fullPath);
+          if (imported.length > 0) {
+            this.saveLocalFallback(imported);
+            return;
+          }
+        }
+      }
+    } catch {
+      // Ignora silenciosamente se nenhum arquivo válido de exportação estiver presente
     }
   }
 

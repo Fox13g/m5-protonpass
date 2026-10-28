@@ -12,7 +12,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "provision": "tsx src/cli/provision.ts",
+    "provision": "node dist/cli/provision.js",
+    "import": "node dist/cli/importProtonExport.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

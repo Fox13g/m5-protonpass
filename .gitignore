@@ -13,6 +13,7 @@ data/
 provision-out/
 cardputer_provision.json
 *.enc
+*.vault
 *.bin
 !releases/*.bin
 *.key

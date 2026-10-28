@@ -12,6 +12,10 @@ services:
       - BRIDGE_PORT=8443
       - STATE_DIR=/app/data
       - PROVISION_OUT_DIR=/app/provision-out
+      - PROTON_PASS_KEY_PROVIDER=fs
+      - PROTON_PASS_NO_UPDATE_CHECK=1
+    ports:
+      - "127.0.0.1:8448:8443"
     volumes:
       # Persiste a sessão autenticada e chaves locais do pass-cli oficial
       - proton_pass_data:/home/sentinel/.local/share/proton-pass-cli
@@ -36,6 +40,8 @@ services:
   sentinel-cloudflared:
     image: cloudflare/cloudflared:latest
     container_name: sentinel-cloudflared
+    profiles:
+      - embedded-tunnel
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     environment:

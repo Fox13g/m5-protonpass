@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import { decryptAes256Gcm, encryptAes256Gcm, sha256 } from './aead.js';
 
 export const CPVAULT_MAGIC = 'CPV1';
@@ -364,4 +365,110 @@ export function decodeOutboxPacket(packet: Buffer, dek32: Buffer): OutboxEnvelop
   const plain = decryptAes256Gcm(ciphertext, dek32, iv, tag, aad);
   return JSON.parse(plain.toString('utf8')) as OutboxEnvelope;
 }
+
+/**
+ * Gera um ficheiro `.vault` compatível com a arquitetura `geo-tp/Password-Manager`:
+ * - Layout binário: `[16 bytes Salt] + [32 bytes SHA-256 Checksum do JSON claro] + [AES-128-ECB PKCS#7 do JSON]`
+ * - Derivação de chave: `PBKDF2-HMAC-SHA256(masterPassword, salt, 10000, 16)`
+ * - Campos de cada entrada: `serviceName`, `username`, `password`, `notes2` (segredo TOTP 2FA), `notes`, `link`.
+ */
+export function buildGeoTpVaultFile(
+  items: VaultCredentialRecord[],
+  masterPassword: string
+): Buffer {
+  // Conta títulos repetidos para desambiguar no visor do Cardputer quando necessário
+  const titleCounts = new Map<string, number>();
+  for (const it of items) {
+    const key = (it.title || 'Sem Titulo').trim().toLowerCase();
+    titleCounts.set(key, (titleCounts.get(key) ?? 0) + 1);
+  }
+
+  const mapped = items.map((it) => {
+    const baseTitle = (it.title || 'Sem Titulo').trim();
+    const count = titleCounts.get(baseTitle.toLowerCase()) ?? 1;
+    const serviceName =
+      count > 1 && it.username ? `${baseTitle} (${it.username.trim()})` : baseTitle;
+    const noteVal = it.notes?.trim()
+      ? it.notes.trim()
+      : it.url?.trim()
+        ? it.url.trim()
+        : '';
+
+    return {
+      serviceName,
+      username: it.username ?? '',
+      password: it.password ?? '',
+      categoryIndex: 0,
+      notes: noteVal,
+      notes2: it.totpSecret ?? '',
+      notes3: '',
+      link: it.url ?? '',
+      createdAt: it.updatedAt || Math.floor(Date.now() / 1000),
+      updatedAt: it.updatedAt || Math.floor(Date.now() / 1000),
+      expiresAt: 0,
+    };
+  });
+
+  // Ordena Z -> A no JSON para que o std::reverse() do EntryController exiba A -> Z no Cardputer
+  mapped.sort((a, b) =>
+    b.serviceName.localeCompare(a.serviceName, undefined, { sensitivity: 'base' })
+  );
+
+  const entries = mapped.map((entry, idx) => ({
+    id: idx,
+    ...entry,
+  }));
+
+  const jsonPayload = JSON.stringify({
+    categories: [],
+    entries,
+  });
+
+  const plainBuf = Buffer.from(jsonPayload, 'utf8');
+  const salt = crypto.randomBytes(16);
+  const checksum = sha256(plainBuf); // 32 bytes SHA-256 do plaintext JSON
+  const key = crypto.pbkdf2Sync(Buffer.from(masterPassword, 'utf8'), salt, 10000, 16, 'sha256');
+
+  const cipher = crypto.createCipheriv('aes-128-ecb', key, null);
+  cipher.setAutoPadding(true); // PKCS#7 padding padrão
+  const encrypted = Buffer.concat([cipher.update(plainBuf), cipher.final()]);
+
+  return Buffer.concat([salt, checksum, encrypted]);
+}
+
+/**
+ * Decifra e valida o checksum SHA-256 de um ficheiro `.vault` (`geo-tp/Password-Manager`).
+ */
+export function decryptGeoTpVaultFile(vaultBuffer: Buffer, masterPassword: string): {
+  categories: unknown[];
+  entries: Array<{
+    id: number;
+    serviceName: string;
+    username: string;
+    password: string;
+    notes: string;
+    notes2: string;
+    link: string;
+  }>;
+} {
+  if (vaultBuffer.length < 48) {
+    throw new Error('Vault file too small (< 48 bytes)');
+  }
+  const salt = vaultBuffer.subarray(0, 16);
+  const expectedChecksum = vaultBuffer.subarray(16, 48);
+  const encrypted = vaultBuffer.subarray(48);
+
+  const key = crypto.pbkdf2Sync(Buffer.from(masterPassword, 'utf8'), salt, 10000, 16, 'sha256');
+  const decipher = crypto.createDecipheriv('aes-128-ecb', key, null);
+  decipher.setAutoPadding(true);
+  const plainBuf = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+
+  const actualChecksum = sha256(plainBuf);
+  if (!actualChecksum.equals(expectedChecksum)) {
+    throw new Error('Checksum mismatch on decrypted .vault file');
+  }
+
+  return JSON.parse(plainBuf.toString('utf8'));
+}
+
 

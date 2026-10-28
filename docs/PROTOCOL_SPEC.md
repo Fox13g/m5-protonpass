@@ -1,10 +1,27 @@
-# Especificação do Protocolo e Formato Binário (`CPVAULT v1`)
+# Especificação dos Formatos de Cofre (`.vault` & `CPVAULT v1`)
 
-Este documento define formalmente o formato binário indexado **`CPVAULT v1`** utilizado para persistência e trânsito de credenciais entre o **Bridge Gateway (Node.js)** e o **M5Stack Cardputer (ESP32-S3FN8)**, bem como o protocolo de sincronização incremental sob arquitetura **Zero-Trust End-to-End Encrypted (E2EE)**.
+Este documento descreve tanto o formato de arquivo **`.vault`** (compatível com [`geo-tp/Password-Manager`](https://github.com/geo-tp/Password-Manager) + extensão 2FA TOTP no cartão microSD) quanto o protocolo binário **`CPVAULT v1`** do Bridge Gateway.
 
 ---
 
-## 1. Motivação: O Limite de 512 KB de SRAM do ESP32-S3FN8
+## 0. Formato de Arquivo `.vault` (Cartão microSD — `geo-tp/Password-Manager` + 2FA)
+
+Os arquivos `.vault` gerados em `./provision-out/vaults/` (`ProtonPass.vault`, `Personal.vault`, etc.) seguem exatamente o layout criptográfico esperado pelo `CryptoService` do firmware:
+
+| Offset | Tamanho | Campo | Descrição |
+| :--- | :--- | :--- | :--- |
+| `0x00` | `16 B` | `salt` | 16 bytes aleatórios gerados via CSPRNG |
+| `0x10` | `32 B` | `checksum` | Hash `SHA-256` do payload JSON em texto claro (UTF-8) |
+| `0x30` | `N × 16 B` | `encryptedData` | Payload JSON cifrado com `AES-128-ECB` e preenchimento `PKCS#7` |
+
+- **Derivação da Chave (`PBKDF2`):**
+  $$\text{Key}_{16\text{B}} = \text{PBKDF2-HMAC-SHA256}(\text{MasterPassword}, \text{salt}_{16\text{B}}, \text{iterations}=10000, \text{keyLen}=16)$$
+- ** Mapeamento do Segredo 2FA (TOTP):**
+  Cada entrada no array `entries` do JSON possui os campos `serviceName`, `username`, `password`, `notes` (Notas/URL) e `notes2` (que armazena o segredo **Base32** ou URI `otpauth://` usado pelo `TotpService` no firmware para gerar o código TOTP de 6 dígitos via `HMAC-SHA1`).
+
+---
+
+## 1. Motivação: O Limite de 512 KB de SRAM do ESP32-S3FN8 (Protocolo Bridge `CPVAULT v1`)
 
 O módulo Stamp-S3 que equipa o M5Stack Cardputer dispõe de **512 KB de SRAM interna** e **não possui PSRAM externa**. Com o escalonador FreeRTOS, a pilha Wi-Fi 802.11, o contexto TLS e os dois sprites gráficos parciais (`M5GFX` de $240 \times 20$ e $240 \times 115$ píxeis), restam aproximadamente **180 KB a 220 KB de heap dinâmico contíguo**.
 

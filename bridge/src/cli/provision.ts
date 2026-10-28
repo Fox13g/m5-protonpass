@@ -5,6 +5,7 @@ import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { loadConfig } from '../config.js';
 import { PassCliAdapter } from '../proton/passCliAdapter.js';
+import { buildCpVaultBinary, buildGeoTpVaultFile } from '../crypto/vaultBuilder.js';
 
 export interface CardputerProvisionFile {
   schemaVersion: 1;
@@ -47,6 +48,11 @@ export function generateProvisionPayload(params: {
   const hmacSecretHex = params.hmacSecretHex || crypto.randomBytes(32).toString('hex');
   const pbkdf2SaltHex = crypto.randomBytes(16).toString('hex');
 
+  let cleanUrl = params.tunnelUrl.trim().replace(/\/+$/, '');
+  if (cleanUrl && !/^https?:\/\//i.test(cleanUrl)) {
+    cleanUrl = `https://${cleanUrl}`;
+  }
+
   return {
     schemaVersion: 1,
     generatedAtIso: new Date().toISOString(),
@@ -54,7 +60,7 @@ export function generateProvisionPayload(params: {
     network: {
       wifiSsid: params.wifiSsid,
       wifiPassword: params.wifiPassword,
-      tunnelUrl: params.tunnelUrl.replace(/\/+$/, ''),
+      tunnelUrl: cleanUrl,
       cfAccessClientId: params.cfAccessClientId ?? '',
       cfAccessClientSecret: params.cfAccessClientSecret ?? '',
       mdnsServiceName: params.mdnsServiceName ?? 'proton-bridge',
@@ -92,10 +98,14 @@ async function runInteractiveCli(): Promise<void> {
   let tunnelUrl = cfg.PUBLIC_TUNNEL_URL || 'https://sentinel.seudominio.com.br';
   let deviceId = cfg.SENTINEL_DEVICE_ID || 'cardputer-primary-01';
   let layout: 'PT_BR_ABNT2' | 'US_ANSI' = 'PT_BR_ABNT2';
+  let masterPassword = process.env.CARDPUTER_MASTER_PASSWORD || '9868';
 
   if (!nonInteractive && input.isTTY) {
     const rl = readline.createInterface({ input, output });
     try {
+      const ansMaster = await rl.question(`0. Senha Mestre dos cofres .vault [${masterPassword}]: `);
+      if (ansMaster.trim()) masterPassword = ansMaster.trim();
+
       const ansSsid = await rl.question(`1. Nome da rede Wi-Fi 2.4GHz [${wifiSsid}]: `);
       if (ansSsid.trim()) wifiSsid = ansSsid.trim();
 
@@ -145,20 +155,75 @@ async function runInteractiveCli(): Promise<void> {
   const outFilePath = path.join(cfg.PROVISION_OUT_DIR, 'cardputer_provision.json');
   fs.writeFileSync(outFilePath, JSON.stringify(provisionData, null, 2), {
     encoding: 'utf8',
-    mode: 0o600,
+    mode: 0o644,
   });
+
+  // 3. Gera os ficheiros `.vault` (formato geo-tp/Password-Manager) e o backup `.enc`
+  const encVaultPath = path.join(cfg.PROVISION_OUT_DIR, 'sentinel_vault_backup.enc');
+  const vaultsDir = path.join(cfg.PROVISION_OUT_DIR, 'vaults');
+  fs.mkdirSync(vaultsDir, { recursive: true });
+  let exportedCount = 0;
+  const generatedVaultFiles: string[] = [];
+
+  try {
+    const items = await adapter.fetchCredentials();
+    if (items.length > 0) {
+      const dekBuf = Buffer.from(provisionData.crypto.dekHex, 'hex');
+      const { vaultBuffer } = buildCpVaultBinary({ items, dek32: dekBuf });
+      fs.writeFileSync(encVaultPath, vaultBuffer, { mode: 0o644 });
+      exportedCount = items.length;
+
+      // Cofre unificado ProtonPass.vault com todas as credenciais
+      const unifiedVaultBuf = buildGeoTpVaultFile(items, masterPassword);
+      const unifiedVaultPath = path.join(vaultsDir, 'ProtonPass.vault');
+      fs.writeFileSync(unifiedVaultPath, unifiedVaultBuf, { mode: 0o644 });
+      generatedVaultFiles.push(`ProtonPass.vault (${items.length} credenciais)`);
+
+      // Cofres separados por Vault do Proton Pass (ex: Personal.vault, Detran.vault)
+      const byVault = new Map<string, typeof items>();
+      for (const it of items) {
+        const vName = (it.vaultId || 'Default').replace(/[^a-zA-Z0-9_-]/g, '_') || 'Default';
+        const arr = byVault.get(vName) ?? [];
+        arr.push(it);
+        byVault.set(vName, arr);
+      }
+
+      for (const [vName, vItems] of byVault.entries()) {
+        const vBuf = buildGeoTpVaultFile(vItems, masterPassword);
+        const vPath = path.join(vaultsDir, `${vName}.vault`);
+        fs.writeFileSync(vPath, vBuf, { mode: 0o644 });
+        generatedVaultFiles.push(`${vName}.vault (${vItems.length} credenciais)`);
+      }
+    }
+  } catch {
+    // Se ainda não houver credenciais importadas, prossegue apenas com o provision.json
+  }
 
   console.log('\n✅ Provisionamento concluído com sucesso!');
   console.log(`🔑 Chaves do servidor salvas em: ${keysEnvPath}`);
-  console.log(`💾 Ficheiro do cartão microSD gerado em: ${outFilePath}`);
+  console.log(`💾 Ficheiro de chaves do SD gerado em: ${outFilePath}`);
+  if (exportedCount > 0) {
+    console.log(
+      `🔐 Cofres .vault gerados em ${vaultsDir} (Senha Mestre: "${masterPassword}"):`
+    );
+    for (const vf of generatedVaultFiles) {
+      console.log(`   • ${vf}`);
+    }
+  }
   console.log('\n👉 Próximo passo:');
-  console.log('   1. Copie "cardputer_provision.json" para a raiz do cartão microSD (FAT32).');
-  console.log('   2. Insira o cartão no M5Stack Cardputer e ligue o aparelho.');
-  console.log('   3. O Cardputer importará as chaves para a NVS segura e apagará o ficheiro do SD.\n');
+  console.log(
+    '   1. Copie a pasta "vaults/" (ou os ficheiros .vault dentro dela) para o cartão microSD (FAT32).'
+  );
+  console.log('   2. Insira o cartão no M5Stack Cardputer, selecione "Load Vault" e digite a senha mestre.');
+  console.log(
+    '   3. Para códigos 2FA (TOTP), ajuste o relógio em "Date & Time" (ou pressione [t] no campo 2FA)!\n'
+  );
 }
 
 const isDirectExecution =
-  process.argv[1] && path.resolve(process.argv[1]).endsWith('provision.ts');
+  Boolean(process.argv[1]) &&
+  (path.resolve(process.argv[1]).endsWith('provision.ts') ||
+    path.resolve(process.argv[1]).endsWith('provision.js'));
 
 if (isDirectExecution) {
   runInteractiveCli().catch((err) => {

@@ -1,32 +1,31 @@
-#if !defined(UNIT_TEST_NATIVE)
-#include <Arduino.h>
-#include <M5Cardputer.h>
-#endif
-#include "config.h"
-#include "vault_storage.h"
-#include "hid_injector.h"
-#include "sync_client.h"
-#include "ui_manager.h"
+#ifndef UNIT_TEST
 
-namespace {
-sentinel::VaultStorage g_vaultStorage;
-sentinel::HidInjector  g_hidInjector;
-sentinel::SyncClient   g_syncClient(g_vaultStorage);
-sentinel::UiManager    g_uiManager(g_vaultStorage, g_hidInjector, g_syncClient);
-}
+#include <M5Cardputer.h>
+#include <Views/CardputerView.h>
+#include <Inputs/CardputerInput.h>
+#include <Providers/DependencyProvider.h>
+#include <Dispatchers/ActionDispatcher.h>
+
+using namespace views;
+using namespace inputs;
 
 void setup() {
     auto cfg = M5.config();
     M5Cardputer.begin(cfg, true);
 
-    g_vaultStorage.begin();
-    g_hidInjector.begin();
-    g_uiManager.begin();
+    CardputerView display;
+    CardputerInput input;
+
+    DependencyProvider provider(display, input);
+    provider.setup();
+
+    ActionDispatcher dispatcher(provider);
+    dispatcher.setup();
+    dispatcher.run();
 }
 
 void loop() {
-    M5Cardputer.update();
-    g_uiManager.update();
-    delay(sentinel::KEYBOARD_SCAN_INTERVAL_MS);
+    // Empty as all logic is handled in dispatcher
 }
 
+#endif

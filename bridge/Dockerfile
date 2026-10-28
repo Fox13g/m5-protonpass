@@ -6,8 +6,7 @@ FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
 COPY package.json tsconfig.json ./
-RUN npm install --no-audit --no-fund
-
+COPY node_modules ./node_modules
 COPY src ./src
 RUN npm run build
 
@@ -31,10 +30,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN groupadd -g 10001 sentinel && \
     useradd -u 10001 -g sentinel -m -s /bin/bash sentinel
 
-# Instala o binário oficial pass-cli caso disponível para a arquitetura ou cria wrapper configurável
+# Instala o binário oficial pass-cli do Proton Pass com verificação de arquitetura e provider FS para containers headless
 RUN mkdir -p /usr/local/bin && \
-    (curl -fsSL "https://proton.me/download/pass-cli/linux-${TARGETARCH}/pass-cli" -o /usr/local/bin/pass-cli && chmod +x /usr/local/bin/pass-cli) || \
-    echo '#!/usr/bin/env bash\necho "Aviso: Substitua /usr/local/bin/pass-cli pelo binário oficial do Proton Pass CLI ou monte via volume." >&2\nexit 1' > /usr/local/bin/pass-cli && chmod +x /usr/local/bin/pass-cli
+    ARCH=$(uname -m) && \
+    PASS_URL=$(curl -fsSL https://proton.me/download/pass-cli/versions.json | grep -o "https://proton.me/download/pass-cli/[^\"]*/pass-cli-linux-${ARCH}" | head -n 1) && \
+    curl -fsSL "${PASS_URL:-https://proton.me/download/pass-cli/2.6.0/pass-cli-linux-${ARCH}}" -o /usr/local/bin/pass-cli.bin && \
+    chmod 755 /usr/local/bin/pass-cli.bin && \
+    printf '#!/usr/bin/env bash\nexport PROTON_PASS_KEY_PROVIDER="${PROTON_PASS_KEY_PROVIDER:-fs}"\nexport PROTON_PASS_NO_UPDATE_CHECK=1\nexec /usr/local/bin/pass-cli.bin "$@"\n' > /usr/local/bin/pass-cli && \
+    chmod 755 /usr/local/bin/pass-cli && \
+    /usr/local/bin/pass-cli --version
 
 WORKDIR /app
 
