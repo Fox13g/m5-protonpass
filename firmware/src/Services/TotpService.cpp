@@ -9,11 +9,150 @@
 #include <algorithm>
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WiFiUdp.h>
+#include <WiFiClient.h>
 
 // Piso mínimo seguro (01/01/2024 00:00:00 UTC) apenas para detectar relógio zerado (1970) no boot
 static constexpr uint64_t SAFE_MIN_EPOCH = 1704067200ULL;
 // Valor inicial padrão caso NVS ainda esteja vazia (01/01/2025 12:00:00 UTC)
 static constexpr uint64_t DEFAULT_INITIAL_EPOCH = 1735732800ULL;
+// Diferença em segundos entre época NTP (01/01/1900) e época Unix (01/01/1970)
+static constexpr uint32_t NTP_UNIX_OFFSET = 2208988800UL;
+
+static bool queryUdpNtpServer(const char* host, uint64_t* outUnixEpoch, uint32_t* outUsec) {
+    IPAddress ntpIp;
+    if (!WiFi.hostByName(host, ntpIp)) {
+        return false;
+    }
+
+    WiFiUDP udp;
+    if (!udp.begin(2390)) {
+        return false;
+    }
+
+    while (udp.parsePacket() > 0) {
+        udp.flush();
+    }
+
+    uint8_t packet[48];
+    std::memset(packet, 0, sizeof(packet));
+    packet[0] = 0b00100011; // LI=0, VN=4, Mode=3 (Client)
+
+    if (udp.beginPacket(ntpIp, 123) != 1) {
+        udp.stop();
+        return false;
+    }
+    udp.write(packet, sizeof(packet));
+    if (udp.endPacket() != 1) {
+        udp.stop();
+        return false;
+    }
+
+    uint32_t startWait = millis();
+    while ((millis() - startWait) < 1500) {
+        int packetSize = udp.parsePacket();
+        if (packetSize >= 48) {
+            uint8_t resp[48];
+            int len = udp.read(resp, sizeof(resp));
+            uint8_t mode = resp[0] & 0x07;
+            uint8_t stratum = resp[1];
+            if (len == 48 && (mode == 4 || mode == 5) && stratum > 0 && stratum < 16) {
+                uint32_t secsSince1900 =
+                    (static_cast<uint32_t>(resp[40]) << 24) |
+                    (static_cast<uint32_t>(resp[41]) << 16) |
+                    (static_cast<uint32_t>(resp[42]) << 8)  |
+                    static_cast<uint32_t>(resp[43]);
+                uint32_t frac =
+                    (static_cast<uint32_t>(resp[44]) << 24) |
+                    (static_cast<uint32_t>(resp[45]) << 16) |
+                    (static_cast<uint32_t>(resp[46]) << 8)  |
+                    static_cast<uint32_t>(resp[47]);
+
+                if (secsSince1900 > NTP_UNIX_OFFSET) {
+                    uint64_t unixEpoch = static_cast<uint64_t>(secsSince1900 - NTP_UNIX_OFFSET);
+                    if (unixEpoch >= 1740000000ULL && unixEpoch < 2500000000ULL) {
+                        *outUnixEpoch = unixEpoch;
+                        *outUsec = static_cast<uint32_t>((static_cast<uint64_t>(frac) * 1000000ULL) >> 32);
+                        udp.stop();
+                        return true;
+                    }
+                }
+            }
+        }
+        delay(15);
+    }
+
+    udp.stop();
+    return false;
+}
+
+static uint64_t utcComponentsToEpoch(int year, int month, int day, int hour, int min, int sec) {
+    // Algoritmo civil-to-days de Howard Hinnant (UTC puro, independente de TZ)
+    int y = year - (month <= 2 ? 1 : 0);
+    int era = (y >= 0 ? y : y - 399) / 400;
+    unsigned yoe = static_cast<unsigned>(y - era * 400);
+    unsigned doy = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+    unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    int64_t days = static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(doe) - 719468;
+    if (days < 0) return 0;
+    return static_cast<uint64_t>(days) * 86400ULL +
+           static_cast<uint64_t>(hour) * 3600ULL +
+           static_cast<uint64_t>(min) * 60ULL +
+           static_cast<uint64_t>(sec);
+}
+
+static bool queryHttpDateFallback(const char* host, uint64_t* outUnixEpoch) {
+    WiFiClient client;
+    client.setTimeout(2500);
+    if (!client.connect(host, 80)) {
+        return false;
+    }
+
+    std::string req = std::string("HEAD / HTTP/1.1\r\nHost: ") + host +
+                      "\r\nUser-Agent: CardputerPass/1.0\r\nConnection: close\r\n\r\n";
+    client.print(req.c_str());
+
+    uint32_t startWait = millis();
+    while (client.connected() && (millis() - startWait) < 2500) {
+        if (client.available()) {
+            String line = client.readStringUntil('\n');
+            if (line.startsWith("Date:") || line.startsWith("date:")) {
+                // Exemplo: "Date: Wed, 28 Oct 2026 19:35:10 GMT"
+                char wkday[8] = {}, monStr[8] = {};
+                int day = 0, year = 0, hh = 0, mm = 0, ss = 0;
+                if (std::sscanf(line.c_str() + 5, " %7s %d %7s %d %d:%d:%d",
+                                wkday, &day, monStr, &year, &hh, &mm, &ss) == 7) {
+                    const char* months[] = {
+                        "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
+                    };
+                    int month = 0;
+                    for (int i = 0; i < 12; ++i) {
+                        if (std::strncmp(monStr, months[i], 3) == 0) {
+                            month = i + 1;
+                            break;
+                        }
+                    }
+                    if (month >= 1 && month <= 12 && year >= 2025) {
+                        uint64_t epoch = utcComponentsToEpoch(year, month, day, hh, mm, ss);
+                        if (epoch >= 1740000000ULL && epoch < 2500000000ULL) {
+                            *outUnixEpoch = epoch;
+                            client.stop();
+                            return true;
+                        }
+                    }
+                }
+            }
+            if (line == "\r" || line.length() == 0) {
+                break;
+            }
+        } else {
+            delay(10);
+        }
+    }
+    client.stop();
+    return false;
+}
 
 void TotpService::initClock(uint64_t savedEpoch) {
     // Define fuso horário padrão para Brasília (UTC-3: POSIX "BRT3")
@@ -189,6 +328,9 @@ bool TotpService::syncTimeViaWifiNtp(const std::string& ssid, const std::string&
     }
 
     WiFi.mode(WIFI_STA);
+    WiFi.disconnect(true);
+    delay(80);
+
     if (password.empty()) {
         WiFi.begin(ssid.c_str());
     } else {
@@ -196,7 +338,7 @@ bool TotpService::syncTimeViaWifiNtp(const std::string& ssid, const std::string&
     }
 
     uint32_t startMs = millis();
-    while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < 10000) {
+    while (WiFi.status() != WL_CONNECTED && (millis() - startMs) < 12000) {
         delay(100);
     }
 
@@ -207,25 +349,65 @@ bool TotpService::syncTimeViaWifiNtp(const std::string& ssid, const std::string&
         return false;
     }
 
-    // Configura NTP oficial (NTP.br + pool.ntp.org) com fuso de Brasília (UTC-3)
-    configTzTime("BRT3", "a.st1.ntp.br", "pool.ntp.org", "time.cloudflare.com");
+    // Aguarda estabilização da rota/DNS após DHCP
+    delay(150);
 
-    struct tm timeinfo = {};
-    bool synced = getLocalTime(&timeinfo, 8000);
+    // 1. Consulta direta via pacotes UDP NTP v4 (imune ao relógio prévio do ESP32)
+    const char* ntpServers[] = {
+        "a.st1.ntp.br",
+        "pool.ntp.org",
+        "time.cloudflare.com",
+        "time.google.com",
+        "200.160.7.186",   // IP direto NTP.br (caso DNS do roteador demore)
+        "162.159.200.1",   // IP direto Cloudflare NTP
+        "216.239.35.0"     // IP direto Google NTP
+    };
+
+    uint64_t syncedEpoch = 0;
+    uint32_t syncedUsec = 0;
+    bool synced = false;
+
+    for (const char* srv : ntpServers) {
+        if (queryUdpNtpServer(srv, &syncedEpoch, &syncedUsec)) {
+            synced = true;
+            break;
+        }
+    }
+
+    // 2. Fallback via cabeçalho HTTP Date: (porta TCP 80) caso a rede bloqueie UDP 123
+    if (!synced) {
+        const char* httpHosts[] = {
+            "cloudflare.com",
+            "www.google.com",
+            "1.1.1.1"
+        };
+        for (const char* host : httpHosts) {
+            if (queryHttpDateFallback(host, &syncedEpoch)) {
+                syncedUsec = 0;
+                synced = true;
+                break;
+            }
+        }
+    }
 
     WiFi.disconnect(true);
     WiFi.mode(WIFI_OFF);
 
-    if (!synced) {
+    if (!synced || syncedEpoch < SAFE_MIN_EPOCH) {
         if (outError) *outError = "NTP timeout";
         return false;
     }
 
+    struct timeval tv;
+    tv.tv_sec = static_cast<time_t>(syncedEpoch);
+    tv.tv_usec = static_cast<suseconds_t>(syncedUsec);
+    settimeofday(&tv, nullptr);
+
     setenv("TZ", "BRT3", 1);
     tzset();
-    time_t now = time(nullptr);
+
     if (outNewEpoch) {
-        *outNewEpoch = static_cast<uint64_t>(now);
+        *outNewEpoch = syncedEpoch;
     }
     return true;
 }

@@ -5,6 +5,9 @@ UsbService::UsbService()
 
 void UsbService::setLayout(const uint8_t* newLayout) {
     layout = newLayout;
+    if (initialized) {
+        keyboard.begin(layout);
+    }
 }
 
 void UsbService::begin() {
@@ -34,6 +37,10 @@ void UsbService::sendString(const std::string& text) {
 
 bool UsbService::isReady() const {
     return initialized;
+}
+
+bool UsbService::isHostConnected() const {
+    return initialized && tud_hid_n_ready(0);
 }
 
 void UsbService::sendChunkedString(const std::string& data, size_t chunkSize, unsigned long delayBetweenChunks) {

@@ -21,8 +21,10 @@ O **Cardputer Pass Sentinel** é um gerenciador de senhas físico e autenticador
   - **Configuração perfeita de Data e Hora (`Date & Time`):**
     1. **`Sync Wi-Fi (NTP)`**: Escaneia as redes Wi-Fi 2.4 GHz ao redor, permite selecionar o SSID na tela, sincroniza a hora exata ao segundo via NTP (`a.st1.ntp.br` / `pool.ntp.org`, fuso `BRT` UTC-3) e desliga o Wi-Fi imediatamente.
     2. **`Manual Clock (Arrows)`**: Relógio visual interativo controlado pelas setas `,` `/` (escolhe Dia, Mês, Ano, Hora, Minuto ou Segundo) e `;` `.` (`+1` / `-1`), permitindo cravar o segundo `:00` com `Enter`.
-- **Teclado USB HID Nativo com Layout `Portuguese (BR)` ABNT2 por Padrão:**
-  - Digita automaticamente usuários (`User`), senhas (`Pass`) ou o código de 6 dígitos (`2FA`) via cabo USB-C em qualquer computador, respeitando acentos e caracteres especiais do teclado brasileiro **ABNT2** (além de `US`, `UK`, `FR`, `DE`, `ES`, `IT`, `PT`, `SE`, `DA`, `HU`).
+- **Teclado USB HID Nativo com Layout `Portuguese (BR)` ABNT2 + Atalhos Diretos (`U`, `P`, `T`, `N`):**
+  - **Envio imediato por tecla de atalho:** Na tela da credencial, basta pressionar **`U`** (User), **`P`** (Pass), **`T`** (2FA de 6 dígitos) ou **`N`** (Note) para que o Cardputer digite o valor **diretamente via USB** e permaneça na mesma tela (permitindo enviar `U` → `P` → `T` em sequência!).
+  - **Detecção automática de conexão USB (`tud_ready`):** Se o cabo USB **não** estiver conectado a um computador (ou se você selecionar a linha com as setas e pressionar **`Enter / OK`**), o Cardputer abre normalmente a tela de detalhes do campo (`View`, `Edit`, `Update`).
+  - Respeita acentos e caracteres especiais do teclado brasileiro **ABNT2** (além de `US`, `UK`, `FR`, `DE`, `ES`, `IT`, `PT`, `SE`, `DA`, `HU`).
 - **Compatível com Contas Proton Pass Free, Plus e Pro:**
   - Importa diretamente exportações do Proton Pass (`.zip`, `.json`, `.csv` ou `.pgp`) e gera automaticamente todos os arquivos `.vault` cifrados (`PBKDF2-HMAC-SHA256` 10.000 iterações + `AES-128-ECB PKCS#7` + `SHA-256 Checksum`).
 

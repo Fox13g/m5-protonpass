@@ -9,6 +9,7 @@ ActionDispatcher::ActionDispatcher(DependencyProvider& provider)
 
 void ActionDispatcher::setup() {
     provider.getUtilityController().handleLoadNvs();
+    provider.getUtilityController().handleKeyboardInitialization();
     provider.getUtilityController().handleWelcome();
 }
 

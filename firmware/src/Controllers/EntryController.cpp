@@ -134,7 +134,6 @@ Entry EntryController::handleEntrySelection() {
 }
 
 Field EntryController::handleFieldSelection(Entry& selectedEntry) {
-    auto fieldValues = modelTransformer.toStrings(selectedEntry);
     std::vector<std::string> fieldLabels = {"User", "Pass", "2FA", "Note"};
     std::vector<std::string> shortcuts = {"U", "P", "T", "N"};
 
@@ -156,29 +155,63 @@ Field EntryController::handleFieldSelection(Entry& selectedEntry) {
         };
     }
 
-    auto selectedIndex = verticalSelector.select(
-        selectedEntry.getServiceName(),
-        fieldValues,
-        true,
-        false,
-        fieldLabels,
-        shortcuts,
-        true,
-        true,
-        totpLiveCallback
-    );
+    while (true) {
+        auto fieldValues = modelTransformer.toStrings(selectedEntry);
+        bool shortcutUsed = false;
 
-    if (selectedIndex == -1) {
-        return Field();
+        auto selectedIndex = verticalSelector.select(
+            selectedEntry.getServiceName(),
+            fieldValues,
+            true,
+            false,
+            fieldLabels,
+            shortcuts,
+            true,
+            true,
+            totpLiveCallback,
+            &shortcutUsed
+        );
+
+        if (selectedIndex == -1) {
+            return Field();
+        }
+
+        // If user pressed a shortcut key (U, P, T, N) AND USB HID is connected to a host computer,
+        // send the value directly via USB without opening the sub-screen!
+        if (shortcutUsed && usbService.isHostConnected()) {
+            std::string toSend = "";
+            if (fieldLabels[selectedIndex] == "User") {
+                toSend = selectedEntry.getUsername();
+            } else if (fieldLabels[selectedIndex] == "Pass") {
+                toSend = selectedEntry.getPassword();
+            } else if (fieldLabels[selectedIndex] == "2FA") {
+                if (!selectedEntry.getNotes2().empty()) {
+                    toSend = TotpService::generateCode(selectedEntry.getNotes2());
+                }
+            } else if (fieldLabels[selectedIndex] == "Note") {
+                if (!selectedEntry.getNotes().empty() && selectedEntry.getNotes() != "No notes") {
+                    toSend = selectedEntry.getNotes();
+                }
+            }
+
+            if (!toSend.empty()) {
+                ledService.showLed();
+                display.subMessage("Send " + fieldLabels[selectedIndex] + " to USB", 0);
+                usbService.sendString(toSend);
+                ledService.clearLed();
+                delay(250);
+                continue; // Stay on the 4-row credential screen so user can press U -> P -> T in sequence!
+            }
+        }
+
+        // Otherwise (USB not connected, or user pressed OK/Enter, or field is empty), open the field detail screen
+        if (fieldLabels[selectedIndex] == "2FA") {
+            std::string secret = selectedEntry.getNotes2().empty() ? "No 2FA" : selectedEntry.getNotes2();
+            return Field("2FA", secret, "T");
+        }
+
+        return Field(fieldLabels[selectedIndex], fieldValues[selectedIndex], shortcuts[selectedIndex]);
     }
-
-    // For 2FA, pass the raw Base32 secret in Field::value so FieldActionSelector can live-refresh and send only the 6 digits
-    if (fieldLabels[selectedIndex] == "2FA") {
-        std::string secret = selectedEntry.getNotes2().empty() ? "No 2FA" : selectedEntry.getNotes2();
-        return Field("2FA", secret, "T");
-    }
-
-    return Field(fieldLabels[selectedIndex], fieldValues[selectedIndex], shortcuts[selectedIndex]);
 }
 
 bool EntryController::handleEntryCreation() {

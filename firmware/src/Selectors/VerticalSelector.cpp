@@ -15,8 +15,12 @@ int VerticalSelector::select(
         const std::vector<std::string>& shortcuts, 
         bool visibleMention,
         bool handleInactivity,
-        std::function<bool(std::vector<std::string>&)> onTick) 
+        std::function<bool(std::vector<std::string>&)> onTick,
+        bool* outShortcutUsed) 
 {
+    if (outShortcutUsed) {
+        *outShortcutUsed = false;
+    }
     int currentIndex = 0;
     int lastIndex = -1;
     int lastQuerySize = 0;
@@ -60,6 +64,9 @@ int VerticalSelector::select(
         if (!shortcuts.empty()) {
             int shortcutIndex = checkShortcut(shortcuts, key);
             if (shortcutIndex != -1) {
+                if (outShortcutUsed) {
+                    *outShortcutUsed = true;
+                }
                 return shortcutIndex;
             }
         }

@@ -174,11 +174,11 @@ bool UtilityController::handleDateTimeSetting() {
                 true,
                 false,
                 0,
-                false
+                !initialPass.empty()
             );
 
             display.topBar("Wi-Fi NTP Sync", false, false);
-            display.subMessage("Syncing NTP...", 0);
+            display.subMessage("Connecting & Syncing...", 0);
 
             uint64_t syncedEpoch = 0;
             std::string errMsg;
@@ -187,7 +187,7 @@ bool UtilityController::handleDateTimeSetting() {
                 nvsService.saveString("wifiPass", wifiPass);
                 nvsService.saveString(globalState.getNvsSavedEpoch(), std::to_string(syncedEpoch));
                 display.topBar("NTP Synced! (BRT)", false, false);
-                display.subMessage(TotpService::getCurrentTimeWithSecondsStr(), 1800);
+                display.subMessage(TotpService::getCurrentDateTimeStr(), 2200);
                 return true;
             } else {
                 display.topBar("Wi-Fi Sync Error", false, false);

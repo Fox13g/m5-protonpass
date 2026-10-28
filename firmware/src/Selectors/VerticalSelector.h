@@ -22,7 +22,8 @@ public:
         const std::vector<std::string>& shortcuts = {},
         bool visibleMention = false,
         bool handleInactivity = true,
-        std::function<bool(std::vector<std::string>&)> onTick = nullptr
+        std::function<bool(std::vector<std::string>&)> onTick = nullptr,
+        bool* outShortcutUsed = nullptr
     );
 
 private:

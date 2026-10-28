@@ -15,6 +15,7 @@ public:
     void sendString(const std::string& text);
     void sendChunkedString(const std::string& data, size_t chunkSize=128, unsigned long delayBetweenChunks=50);
     bool isReady() const;
+    bool isHostConnected() const;
     void setLayout(const uint8_t* newLayout);
 
 private:
