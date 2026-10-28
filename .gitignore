@@ -14,6 +14,7 @@ provision-out/
 cardputer_provision.json
 *.enc
 *.bin
+!releases/*.bin
 *.key
 
 # PlatformIO / Firmware

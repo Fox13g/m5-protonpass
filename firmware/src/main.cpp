@@ -1,5 +1,7 @@
+#if !defined(UNIT_TEST_NATIVE)
 #include <Arduino.h>
 #include <M5Cardputer.h>
+#endif
 #include "config.h"
 #include "vault_storage.h"
 #include "hid_injector.h"

@@ -89,9 +89,11 @@ public:
     bool clearOutbox();
 
     /**
-     * Exporta uma cópia de backup de `/vault.bin` para o cartão microSD (`/vault_backup.bin`).
+     * Exporta uma cópia de backup de `/vault.bin` para o cartão microSD (`/sentinel_vault_backup.enc`)
+     * e restaura automaticamente quando o firmware é recarregado via M5Launcher.
      */
     bool backupVaultToSdCard();
+    bool restoreVaultFromSdCardIfNeeded();
 
     /**
      * Destrói imediatamente a DEK embrulhada na NVS e formata o cofre no LittleFS.

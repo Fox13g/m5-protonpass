@@ -17,6 +17,21 @@ namespace sentinel {
 // ============================================================================
 // Constantes USB HID Usage Table (Page 0x07) & Modificadores
 // ============================================================================
+#undef HID_KEY_ENTER
+#undef HID_KEY_TAB
+#undef HID_KEY_SPACE
+#undef HID_KEY_MINUS
+#undef HID_KEY_EQUAL
+#undef HID_KEY_LBRACKET
+#undef HID_KEY_RBRACKET
+#undef HID_KEY_BACKSLASH
+#undef HID_KEY_SEMICOLON
+#undef HID_KEY_QUOTE
+#undef HID_KEY_GRAVE
+#undef HID_KEY_COMMA
+#undef HID_KEY_PERIOD
+#undef HID_KEY_SLASH
+
 static constexpr uint8_t MOD_NONE   = 0x00;
 static constexpr uint8_t MOD_LSHIFT = 0x02;
 static constexpr uint8_t MOD_RALT   = 0x40; // AltGr no layout PT-BR ABNT2

@@ -33,8 +33,8 @@ bool VaultStorage::begin() {
         m_spiMutex = xSemaphoreCreateMutex();
     }
 
-    if (!LittleFS.begin(true)) {
-        return false;
+    if (!LittleFS.begin(true, "/littlefs", 10, "spiffs")) {
+        LittleFS.begin(true, "/littlefs", 10, "littlefs");
     }
 
     loadSecurityConfig(m_secConfig);
@@ -167,6 +167,10 @@ bool VaultStorage::reloadVaultIndex() {
     if (!m_unlocked) return false;
 
 #if !defined(UNIT_TEST_NATIVE)
+    if (!LittleFS.exists(VAULT_FILE_PATH)) {
+        restoreVaultFromSdCardIfNeeded();
+    }
+
     if (!LittleFS.exists(VAULT_FILE_PATH)) {
         m_itemCount = 0;
         memset(&m_header, 0, sizeof(m_header));
@@ -392,6 +396,9 @@ bool VaultStorage::commitTempVaultFile() {
         return false;
     }
 
+    // Espelha o cofre cifrado no cartão microSD para persistência entre trocas no M5Launcher
+    backupVaultToSdCard();
+
     return reloadVaultIndex();
 #else
     return true;
@@ -523,6 +530,49 @@ bool VaultStorage::backupVaultToSdCard() {
 
     File src = LittleFS.open(VAULT_FILE_PATH, "r");
     File dst = SD.open(SD_BACKUP_PATH, FILE_WRITE);
+    if (!src || !dst) {
+        if (src) src.close();
+        if (dst) dst.close();
+        SD.end();
+        unlockSpiBus();
+        return false;
+    }
+
+    uint8_t buf[512];
+    while (src.available()) {
+        size_t r = src.read(buf, sizeof(buf));
+        dst.write(buf, r);
+    }
+    src.close();
+    dst.flush();
+    dst.close();
+    SD.end();
+    unlockSpiBus();
+    return true;
+#else
+    return true;
+#endif
+}
+
+bool VaultStorage::restoreVaultFromSdCardIfNeeded() {
+#if !defined(UNIT_TEST_NATIVE)
+    if (LittleFS.exists(VAULT_FILE_PATH)) return true;
+
+    lockSpiBus();
+    SPI.begin(PIN_SD_SCK, PIN_SD_MISO, PIN_SD_MOSI, PIN_SD_CS);
+    if (!SD.begin(PIN_SD_CS, SPI, 20000000)) {
+        unlockSpiBus();
+        return false;
+    }
+
+    if (!SD.exists(SD_BACKUP_PATH)) {
+        SD.end();
+        unlockSpiBus();
+        return false;
+    }
+
+    File src = SD.open(SD_BACKUP_PATH, FILE_READ);
+    File dst = LittleFS.open(VAULT_FILE_PATH, "w");
     if (!src || !dst) {
         if (src) src.close();
         if (dst) dst.close();
