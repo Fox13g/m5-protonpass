@@ -104,33 +104,193 @@ void UtilityController::handleLoadNvs() {
 }
 
 bool UtilityController::handleDateTimeSetting() {
-    std::string currentDt = TotpService::getCurrentDateTimeStr();
-    // Pre-filled with "DD/MM/YYYY HH:MM" and autoDelete=false so user can just Backspace the last 4-5 digits (HH:MM) or type 4 digits (HHMM)
-    std::string newDt = stringPromptSelector.select(
-        "Date & Time (2FA)",
-        "DD/MM/YYYY HH:MM ou HHMM",
-        currentDt,
-        true,
-        false,
-        false,
-        4,
-        false
-    );
+    while (true) {
+        std::vector<std::string> modeOptions = {
+            "Sync Wi-Fi (NTP)",
+            "Manual Clock (Arrows)"
+        };
+        std::string menuTitle = "Clock " + TotpService::getCurrentTimeWithSecondsStr();
+        int modeIndex = verticalSelector.select(
+            menuTitle,
+            modeOptions,
+            true,
+            false,
+            {},
+            {},
+            false,
+            true,
+            [&](std::vector<std::string>&) -> bool {
+                std::string nowTitle = "Clock " + TotpService::getCurrentTimeWithSecondsStr();
+                if (nowTitle != menuTitle) {
+                    menuTitle = nowTitle;
+                    display.topBar(menuTitle, true, false);
+                }
+                return false;
+            }
+        );
 
-    if (newDt.empty()) {
-        return false;
-    }
+        if (modeIndex == -1) {
+            return false;
+        }
 
-    uint64_t newEpoch = 0;
-    if (TotpService::setDateTimeFromStr(newDt, &newEpoch)) {
-        nvsService.saveString(globalState.getNvsSavedEpoch(), std::to_string(newEpoch));
-        display.topBar("Date & Time", false, false);
-        display.subMessage("Clock: " + TotpService::getCurrentDateTimeStr(), 1200);
-        return true;
-    } else {
-        display.topBar("Date & Time", false, false);
-        display.subMessage("Invalid format!", 1500);
-        return false;
+        if (modeIndex == 0) {
+            // Option 1: Sync Wi-Fi (NTP) with automatic 2.4GHz network scan
+            display.topBar("Wi-Fi NTP Sync", true, false);
+            display.subMessage("Scanning Wi-Fi...", 0);
+            auto ssids = TotpService::scanWifiNetworks();
+            ssids.push_back("[Type SSID manually]");
+
+            int ssidIdx = verticalSelector.select("Select 2.4GHz Wi-Fi", ssids, true, false);
+            if (ssidIdx < 0 || static_cast<size_t>(ssidIdx) >= ssids.size()) {
+                continue;
+            }
+
+            std::string selectedSsid = ssids[ssidIdx];
+            std::string savedSsid = nvsService.getString("wifiSsid");
+            std::string savedPass = nvsService.getString("wifiPass");
+
+            if (selectedSsid == "[Type SSID manually]") {
+                selectedSsid = stringPromptSelector.select(
+                    "Wi-Fi SSID (2.4GHz)",
+                    "Enter network name",
+                    savedSsid,
+                    true,
+                    true,
+                    false,
+                    1,
+                    false
+                );
+                if (selectedSsid.empty()) {
+                    continue;
+                }
+            }
+
+            std::string initialPass = (selectedSsid == savedSsid) ? savedPass : "";
+            std::string wifiPass = stringPromptSelector.select(
+                selectedSsid,
+                "Wi-Fi Password (OK=Connect)",
+                initialPass,
+                true,
+                true,
+                false,
+                0,
+                false
+            );
+
+            display.topBar("Wi-Fi NTP Sync", false, false);
+            display.subMessage("Syncing NTP...", 0);
+
+            uint64_t syncedEpoch = 0;
+            std::string errMsg;
+            if (TotpService::syncTimeViaWifiNtp(selectedSsid, wifiPass, &syncedEpoch, &errMsg)) {
+                nvsService.saveString("wifiSsid", selectedSsid);
+                nvsService.saveString("wifiPass", wifiPass);
+                nvsService.saveString(globalState.getNvsSavedEpoch(), std::to_string(syncedEpoch));
+                display.topBar("NTP Synced! (BRT)", false, false);
+                display.subMessage(TotpService::getCurrentTimeWithSecondsStr(), 1800);
+                return true;
+            } else {
+                display.topBar("Wi-Fi Sync Error", false, false);
+                display.subMessage(errMsg.empty() ? "Sync failed" : errMsg, 2000);
+                continue;
+            }
+        } else if (modeIndex == 1) {
+            // Option 2: Visual Manual Clock with Arrows (, / to switch field, ; . to + / -, OK to save)
+            int day = 28, month = 10, year = 2026, hour = 12, minute = 0, second = 0;
+            TotpService::getLocalDateTimeComponents(day, month, year, hour, minute, second);
+
+            // Start on Hour (field 3) so user can immediately adjust HH:MM:SS with arrows
+            int selectedField = 3;
+            bool redraw = true;
+
+            while (true) {
+                if (redraw) {
+                    char fullBuf[32];
+                    std::snprintf(
+                        fullBuf,
+                        sizeof(fullBuf),
+                        "%02d/%02d/%04d %02d:%02d:%02d",
+                        day, month, year, hour, minute, second
+                    );
+
+                    char f0[20], f1[20], f2[20], f3[20], f4[20], f5[20];
+                    std::snprintf(f0, sizeof(f0), "Day: %02d", day);
+                    std::snprintf(f1, sizeof(f1), "Month: %02d", month);
+                    std::snprintf(f2, sizeof(f2), "Year: %04d", year);
+                    std::snprintf(f3, sizeof(f3), "Hour: %02d", hour);
+                    std::snprintf(f4, sizeof(f4), "Min: %02d", minute);
+                    std::snprintf(f5, sizeof(f5), "Sec: %02d", second);
+
+                    std::vector<std::string> fieldLabels = {f0, f1, f2, f3, f4, f5};
+                    display.topBar("Set Clock (Arrows)", true, false);
+                    display.horizontalSelection(
+                        fieldLabels,
+                        selectedField,
+                        std::string(fullBuf),
+                        ",/ Field  ;. +-  OK"
+                    );
+                    redraw = false;
+                }
+
+                char key = input.handler();
+                if (key == KEY_NONE) {
+                    continue;
+                }
+
+                if (key == KEY_ESC_CUSTOM) {
+                    break;
+                } else if (key == KEY_ARROW_LEFT) {
+                    selectedField = (selectedField > 0) ? (selectedField - 1) : 5;
+                    redraw = true;
+                } else if (key == KEY_ARROW_RIGHT) {
+                    selectedField = (selectedField < 5) ? (selectedField + 1) : 0;
+                    redraw = true;
+                } else if (key == KEY_ARROW_UP || key == KEY_ARROW_DOWN) {
+                    int delta = (key == KEY_ARROW_UP) ? 1 : -1;
+                    switch (selectedField) {
+                        case 0: // Day 1..31
+                            day += delta;
+                            if (day > 31) day = 1;
+                            if (day < 1) day = 31;
+                            break;
+                        case 1: // Month 1..12
+                            month += delta;
+                            if (month > 12) month = 1;
+                            if (month < 1) month = 12;
+                            break;
+                        case 2: // Year 2025..2035
+                            year += delta;
+                            if (year > 2035) year = 2025;
+                            if (year < 2025) year = 2035;
+                            break;
+                        case 3: // Hour 0..23
+                            hour += delta;
+                            if (hour > 23) hour = 0;
+                            if (hour < 0) hour = 23;
+                            break;
+                        case 4: // Minute 0..59
+                            minute += delta;
+                            if (minute > 59) minute = 0;
+                            if (minute < 0) minute = 59;
+                            break;
+                        case 5: // Second 0..59
+                            second += delta;
+                            if (second > 59) second = 0;
+                            if (second < 0) second = 59;
+                            break;
+                    }
+                    redraw = true;
+                } else if (key == KEY_OK) {
+                    uint64_t newEpoch = 0;
+                    if (TotpService::setLocalDateTimeComponents(day, month, year, hour, minute, second, &newEpoch)) {
+                        nvsService.saveString(globalState.getNvsSavedEpoch(), std::to_string(newEpoch));
+                        display.topBar("Date & Time", false, false);
+                        display.subMessage("Saved! " + TotpService::getCurrentTimeWithSecondsStr(), 1200);
+                        return true;
+                    }
+                }
+            }
+        }
     }
 }
 

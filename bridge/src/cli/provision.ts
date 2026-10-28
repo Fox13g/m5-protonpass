@@ -5,7 +5,7 @@ import readline from 'node:readline/promises';
 import { stdin as input, stdout as output } from 'node:process';
 import { loadConfig } from '../config.js';
 import { PassCliAdapter } from '../proton/passCliAdapter.js';
-import { buildCpVaultBinary, buildGeoTpVaultFile } from '../crypto/vaultBuilder.js';
+import { buildCpVaultBinary, writeOrganizedGeoTpVaults } from '../crypto/vaultBuilder.js';
 
 export interface CardputerProvisionFile {
   schemaVersion: 1;
@@ -173,27 +173,8 @@ async function runInteractiveCli(): Promise<void> {
       fs.writeFileSync(encVaultPath, vaultBuffer, { mode: 0o644 });
       exportedCount = items.length;
 
-      // Cofre unificado ProtonPass.vault com todas as credenciais
-      const unifiedVaultBuf = buildGeoTpVaultFile(items, masterPassword);
-      const unifiedVaultPath = path.join(vaultsDir, 'ProtonPass.vault');
-      fs.writeFileSync(unifiedVaultPath, unifiedVaultBuf, { mode: 0o644 });
-      generatedVaultFiles.push(`ProtonPass.vault (${items.length} credenciais)`);
-
-      // Cofres separados por Vault do Proton Pass (ex: Personal.vault, Detran.vault)
-      const byVault = new Map<string, typeof items>();
-      for (const it of items) {
-        const vName = (it.vaultId || 'Default').replace(/[^a-zA-Z0-9_-]/g, '_') || 'Default';
-        const arr = byVault.get(vName) ?? [];
-        arr.push(it);
-        byVault.set(vName, arr);
-      }
-
-      for (const [vName, vItems] of byVault.entries()) {
-        const vBuf = buildGeoTpVaultFile(vItems, masterPassword);
-        const vPath = path.join(vaultsDir, `${vName}.vault`);
-        fs.writeFileSync(vPath, vBuf, { mode: 0o644 });
-        generatedVaultFiles.push(`${vName}.vault (${vItems.length} credenciais)`);
-      }
+      const generated = writeOrganizedGeoTpVaults(items, vaultsDir, masterPassword);
+      generatedVaultFiles.push(...generated);
     }
   } catch {
     // Se ainda não houver credenciais importadas, prossegue apenas com o provision.json

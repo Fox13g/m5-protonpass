@@ -271,31 +271,79 @@ bool VaultController::loadDataFromEncryptedFile(std::string path) {
     if (vaultBinary.size() <= globalState.getSaltSize() + globalState.getChecksumSize()) {
         return false;
     }
-    VaultFile vaultFile = VaultFile(path, vaultBinary);
-    // Allow 1+ char password/PIN (e.g. "9868") and Back button
-    auto password = stringPromptSelector.select("Open encrypted vault", "Enter master password", "", true, true, false, 1);
-    if (password.empty()) {
-        return false;
+
+    std::vector<uint8_t> salt;
+    std::vector<uint8_t> savedChecksum;
+    std::vector<uint8_t> encryptedData;
+    {
+        VaultFile vaultFile(path, vaultBinary);
+        salt = vaultFile.getSalt();
+        savedChecksum = vaultFile.getChecksum();
+        encryptedData = vaultFile.getEncryptedData();
+    }
+    vaultBinary.clear();
+    vaultBinary.shrink_to_fit();
+
+    std::string password = globalState.getLoadedVaultPassword();
+    std::string decryptedData;
+    bool unlocked = false;
+
+    // 1. Try cached session password first so user only types master password (e.g. 9868) once per session
+    if (!password.empty()) {
+        display.subMessage("Unlocking...", 0);
+        decryptedData = cryptoService.decryptWithPassphrase(encryptedData, password, salt);
+        if (!decryptedData.empty()) {
+            auto dataChecksum = cryptoService.generateChecksum(decryptedData, globalState.getChecksumSize());
+            if (savedChecksum == dataChecksum) {
+                unlocked = true;
+            }
+        }
+        if (!unlocked) {
+            decryptedData.clear();
+            decryptedData.shrink_to_fit();
+        }
     }
 
-    display.subMessage("Unlocking...", 0);
-    auto salt = vaultFile.getSalt();
-    auto savedChecksum = vaultFile.getChecksum();
-    auto encryptedData = vaultFile.getEncryptedData();
+    // 2. Prompt for master password if not unlocked via session password
+    if (!unlocked) {
+        password = stringPromptSelector.select("Open encrypted vault", "Enter master password", "", true, true, false, 1);
+        if (password.empty()) {
+            return false;
+        }
 
-    auto decryptedData = cryptoService.decryptWithPassphrase(encryptedData, password, salt);
-    if (decryptedData.empty()) {
-        return false;
+        display.subMessage("Unlocking...", 0);
+        decryptedData = cryptoService.decryptWithPassphrase(encryptedData, password, salt);
+        if (decryptedData.empty()) {
+            return false;
+        }
+
+        auto dataChecksum = cryptoService.generateChecksum(decryptedData, globalState.getChecksumSize());
+        if (savedChecksum != dataChecksum) {
+            return false;
+        }
     }
 
-    auto dataChecksum = cryptoService.generateChecksum(decryptedData, globalState.getChecksumSize());
-    if (savedChecksum != dataChecksum) {
-        return false;
+    // Free encrypted buffer before JSON parsing to maximize available ESP32-S3 heap
+    encryptedData.clear();
+    encryptedData.shrink_to_fit();
+    salt.clear();
+    savedChecksum.clear();
+
+    // Free any previously loaded vault entries/categories first
+    {
+        std::vector<Entry> emptyEntries;
+        std::vector<Category> emptyCats;
+        entryService.setEntries(emptyEntries);
+        categoryService.setCategories(emptyCats);
     }
 
     auto vaultName = sdService.getFileName(path);
-    auto entries = jsonTransformer.fromJsonToEntries(decryptedData);
+    // Parse categories first (read-only filter), then entries (zero-copy in-place)
     auto categories = jsonTransformer.fromJsonToCategories(decryptedData);
+    auto entries = jsonTransformer.fromJsonToEntries(decryptedData);
+    decryptedData.clear();
+    decryptedData.shrink_to_fit();
+
     entryService.setEntries(entries);
     entryService.setContainerName(vaultName);
     categoryService.setCategories(categories);

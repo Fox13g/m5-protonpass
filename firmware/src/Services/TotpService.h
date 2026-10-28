@@ -11,7 +11,14 @@ public:
     static uint64_t getCurrentEpoch();
     static std::string getCurrentDateTimeStr();
     static std::string getCurrentTimeShortStr();
+    static std::string getCurrentTimeWithSecondsStr();
+
+    static void getLocalDateTimeComponents(int& day, int& month, int& year, int& hour, int& min, int& sec);
+    static bool setLocalDateTimeComponents(int day, int month, int year, int hour, int min, int sec, uint64_t* outNewEpoch = nullptr);
     static bool setDateTimeFromStr(const std::string& input, uint64_t* outNewEpoch = nullptr);
+
+    static std::vector<std::string> scanWifiNetworks();
+    static bool syncTimeViaWifiNtp(const std::string& ssid, const std::string& password, uint64_t* outNewEpoch = nullptr, std::string* outError = nullptr);
 
     static std::string extractBase32Secret(const std::string& rawInput);
     static std::vector<uint8_t> decodeBase32(const std::string& base32Input);
@@ -19,4 +26,3 @@ public:
 };
 
 #endif // TOTP_SERVICE_H
-

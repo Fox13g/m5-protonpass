@@ -5,7 +5,7 @@ import { stdin as input, stdout as output } from 'node:process';
 import { loadConfig } from '../config.js';
 import { PassCliAdapter } from '../proton/passCliAdapter.js';
 import { importProtonPassFile } from '../proton/protonExportImporter.js';
-import { buildGeoTpVaultFile } from '../crypto/vaultBuilder.js';
+import { writeOrganizedGeoTpVaults } from '../crypto/vaultBuilder.js';
 
 function findCandidateExportFiles(dirs: string[]): string[] {
   const candidates: string[] = [];
@@ -98,23 +98,7 @@ async function main(): Promise<void> {
 
   const masterPassword = process.env.CARDPUTER_MASTER_PASSWORD || '9868';
   const vaultsDir = path.join(cfg.PROVISION_OUT_DIR, 'vaults');
-  fs.mkdirSync(vaultsDir, { recursive: true });
-
-  // Gera o cofre unificado ProtonPass.vault e cofres separados por Vault
-  const unifiedBuf = buildGeoTpVaultFile(imported, masterPassword);
-  fs.writeFileSync(path.join(vaultsDir, 'ProtonPass.vault'), unifiedBuf, { mode: 0o644 });
-
-  const byVault = new Map<string, typeof imported>();
-  for (const it of imported) {
-    const vName = (it.vaultId || 'Default').replace(/[^a-zA-Z0-9_-]/g, '_') || 'Default';
-    const arr = byVault.get(vName) ?? [];
-    arr.push(it);
-    byVault.set(vName, arr);
-  }
-  for (const [vName, vItems] of byVault.entries()) {
-    const vBuf = buildGeoTpVaultFile(vItems, masterPassword);
-    fs.writeFileSync(path.join(vaultsDir, `${vName}.vault`), vBuf, { mode: 0o644 });
-  }
+  const generatedVaultFiles = writeOrganizedGeoTpVaults(imported, vaultsDir, masterPassword);
 
   const totpCount = imported.filter((i) => Boolean(i.totpSecret)).length;
   const vaults = [...new Set(imported.map((i) => i.vaultId))];
@@ -125,6 +109,9 @@ async function main(): Promise<void> {
   console.log(`    • Cofres (Vaults)        : ${vaults.join(', ') || 'Personal'}`);
   console.log(`    • Armazenado em          : ${cfg.STATE_DIR}/fallback_vault_items.json`);
   console.log(`    • Cofres .vault gerados  : ${vaultsDir}/ (Senha Mestre: ${masterPassword})`);
+  for (const vf of generatedVaultFiles) {
+    console.log(`      - ${vf}`);
+  }
   console.log('================================================================\n');
 }
 

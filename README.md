@@ -12,12 +12,15 @@ O **Cardputer Pass Sentinel** é um gerenciador de senhas físico e autenticador
 ## ✨ Funcionalidades Principais
 
 - **Arquitetura e UX `geo-tp/Password-Manager` Aprimorada:**
-  - Navegação em carrossel horizontal (`Load Vault`, `Create Vault`, `Date & Time`, `Settings`) com ícones vetoriais e suporte a **1.000+ credenciais** por arquivo `.vault`.
-  - Múltiplos cofres `.vault` diretamente no cartão microSD (`ProtonPass.vault` unificado + cofres separados por categoria do Proton Pass, como `Personal.vault`, `Detran.vault`, etc.).
+  - Navegação em carrossel horizontal (`Load Vault`, `Create Vault`, `Date & Time`, `Settings`) com ícones vetoriais e abertura instantânea de cofres grandes (parsing JSON *zero-copy* em RAM).
+  - **Organização automática em listas de até 100 senhas + 2FA separado:** Gera `01_2FA.vault`, `02_Detran.vault`, `03_Personal_1-L.vault`, `04_Personal_L-Y.vault` e o cofre unificado `ProtonPass.vault` (que possui menu interno de grupos `* 2FA`, `Detran`, `Personal 1-L`, `Personal L-Y`).
+  - **Desbloqueio único na sessão:** Digite a senha mestre (`9868`) apenas no primeiro cofre aberto; ao trocar de cofre na mesma sessão, o Cardputer reutiliza a senha da sessão automaticamente.
   - Criação, edição e exclusão de entradas (`Add Entry`, `Delete Entry`) diretamente no Cardputer.
-- **Autenticador 2FA (TOTP RFC 6238) + Ajuste Rápido de Data e Hora:**
-  - Calcula códigos **2FA de 6 dígitos** (`HMAC-SHA1`) localmente com contagem regressiva (`30s`).
-  - **Configuração fácil de Data e Hora (`Date & Time`):** Ajuste o relógio a qualquer momento pelo menu principal (`Date & Time`), dentro de `Settings -> Date/Time`, ou pressionando a tecla **`T`** enquanto visualiza um código `2FA` (`[t] set date/time`). Aceita tanto data completa (`DD/MM/YYYY HH:MM`) quanto apenas **4 dígitos da hora atual (`HHMM`, ex: `1540`)**.
+- **Autenticador 2FA (TOTP RFC 6238) Dinâmico em Tempo Real + Sincronização de Relógio Wi-Fi NTP / Setas:**
+  - Calcula e **atualiza dinamicamente a cada 1 segundo** os códigos **2FA de 6 dígitos** (`123 456 (28s)`) tanto na lista de campos da credencial quanto na tela dedicada do `2FA`.
+  - **Configuração perfeita de Data e Hora (`Date & Time`):**
+    1. **`Sync Wi-Fi (NTP)`**: Escaneia as redes Wi-Fi 2.4 GHz ao redor, permite selecionar o SSID na tela, sincroniza a hora exata ao segundo via NTP (`a.st1.ntp.br` / `pool.ntp.org`, fuso `BRT` UTC-3) e desliga o Wi-Fi imediatamente.
+    2. **`Manual Clock (Arrows)`**: Relógio visual interativo controlado pelas setas `,` `/` (escolhe Dia, Mês, Ano, Hora, Minuto ou Segundo) e `;` `.` (`+1` / `-1`), permitindo cravar o segundo `:00` com `Enter`.
 - **Teclado USB HID Nativo com Layout `Portuguese (BR)` ABNT2 por Padrão:**
   - Digita automaticamente usuários (`User`), senhas (`Pass`) ou o código de 6 dígitos (`2FA`) via cabo USB-C em qualquer computador, respeitando acentos e caracteres especiais do teclado brasileiro **ABNT2** (além de `US`, `UK`, `FR`, `DE`, `ES`, `IT`, `PT`, `SE`, `DA`, `HU`).
 - **Compatível com Contas Proton Pass Free, Plus e Pro:**

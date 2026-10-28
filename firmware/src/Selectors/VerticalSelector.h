@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <string>
 #include <vector>
+#include <functional>
 #include <Views/IView.h>
 #include <Inputs/IInput.h>
 #include <States/GlobalState.h>
@@ -12,7 +13,17 @@
 class VerticalSelector {
 public:
     VerticalSelector(IView& display, IInput& input, InactivityManager& inactivityManager);
-    int select(const std::string& title, const std::vector<std::string>& options, bool subMenu = false, bool searchBar = false,  const std::vector<std::string>& options2={},  const std::vector<std::string>& shortcuts={}, bool visibleMention=false, bool handleInactivity=true);
+    int select(
+        const std::string& title,
+        const std::vector<std::string>& options,
+        bool subMenu = false,
+        bool searchBar = false,
+        const std::vector<std::string>& options2 = {},
+        const std::vector<std::string>& shortcuts = {},
+        bool visibleMention = false,
+        bool handleInactivity = true,
+        std::function<bool(std::vector<std::string>&)> onTick = nullptr
+    );
 
 private:
     IView& display;

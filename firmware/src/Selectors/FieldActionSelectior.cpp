@@ -10,26 +10,35 @@ ActionEnum FieldActionSelector::select(const std::string& label, const std::stri
 
     bool isTotp = (label == "2FA");
     uint32_t lastRefreshMs = 0;
+    std::string lastRenderedState = "";
 
-    auto renderScreen = [&]() {
+    auto renderScreen = [&](bool force) {
         if (isTotp) {
-            std::string topTitle = "2FA  " + TotpService::getCurrentTimeShortStr();
-            display.topBar(topTitle, true, false);
+            std::string timeStr = TotpService::getCurrentTimeWithSecondsStr();
+            std::string topTitle = "2FA  " + timeStr;
+            std::string shown = "No 2FA (press M)";
             if (!value.empty() && value != "No 2FA") {
                 uint8_t remSec = 0;
                 std::string code = TotpService::generateCode(value, &remSec);
-                std::string shown = code.empty() ? "Invalid 2FA" : (code + " (" + std::to_string(remSec) + "s)");
-                display.value(label, shown);
-            } else {
-                display.value(label, "No 2FA (press M)");
+                if (code.size() == 6) {
+                    shown = code.substr(0, 3) + " " + code.substr(3) + " (" + std::to_string(remSec) + "s)";
+                } else {
+                    shown = code.empty() ? "Invalid 2FA" : (code + " (" + std::to_string(remSec) + "s)");
+                }
             }
-        } else {
+            std::string currentState = topTitle + "|" + shown;
+            if (force || currentState != lastRenderedState) {
+                lastRenderedState = currentState;
+                display.topBar(topTitle, true, false);
+                display.value(label, shown);
+            }
+        } else if (force) {
             display.topBar(label, true, false);
             display.value(label, value);
         }
     };
 
-    renderScreen();
+    renderScreen(true);
     lastRefreshMs = millis();
 
     while (true) {
@@ -39,9 +48,9 @@ ActionEnum FieldActionSelector::select(const std::string& label, const std::stri
             return ActionEnum::None;
         }
 
-        if (isTotp && (millis() - lastRefreshMs >= 1000)) {
+        if (isTotp && (millis() - lastRefreshMs >= 250)) {
             lastRefreshMs = millis();
-            renderScreen();
+            renderScreen(false);
         }
 
         key = input.handler();

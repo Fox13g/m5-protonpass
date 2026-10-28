@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { decryptAes256Gcm, encryptAes256Gcm, sha256 } from './aead.js';
 
 export const CPVAULT_MAGIC = 'CPV1';
@@ -388,30 +390,31 @@ export function buildGeoTpVaultFile(
     const count = titleCounts.get(baseTitle.toLowerCase()) ?? 1;
     const serviceName =
       count > 1 && it.username ? `${baseTitle} (${it.username.trim()})` : baseTitle;
-    const noteVal = it.notes?.trim()
+    const rawNote = it.notes?.trim()
       ? it.notes.trim()
       : it.url?.trim()
         ? it.url.trim()
         : '';
+    const noteVal = rawNote.length > 96 ? rawNote.slice(0, 96) : rawNote;
 
-    return {
+    // Formato JSON enxuto para minimizar uso de RAM no ESP32-S3 (mantendo 100% de compatibilidade)
+    const entryObj: Record<string, unknown> = {
       serviceName,
       username: it.username ?? '',
       password: it.password ?? '',
-      categoryIndex: 0,
-      notes: noteVal,
-      notes2: it.totpSecret ?? '',
-      notes3: '',
-      link: it.url ?? '',
-      createdAt: it.updatedAt || Math.floor(Date.now() / 1000),
-      updatedAt: it.updatedAt || Math.floor(Date.now() / 1000),
-      expiresAt: 0,
     };
+    if (noteVal) entryObj.notes = noteVal;
+    if (it.totpSecret?.trim()) entryObj.notes2 = it.totpSecret.trim();
+    if (it.vaultId?.trim()) entryObj.notes3 = it.vaultId.trim();
+    if (it.url?.trim()) entryObj.link = it.url.trim().slice(0, 96);
+    return entryObj;
   });
 
-  // Ordena Z -> A no JSON para que o std::reverse() do EntryController exiba A -> Z no Cardputer
+  // Ordena A -> Z por serviceName
   mapped.sort((a, b) =>
-    b.serviceName.localeCompare(a.serviceName, undefined, { sensitivity: 'base' })
+    String(a.serviceName).localeCompare(String(b.serviceName), undefined, {
+      sensitivity: 'base',
+    })
   );
 
   const entries = mapped.map((entry, idx) => ({
@@ -437,6 +440,87 @@ export function buildGeoTpVaultFile(
 }
 
 /**
+ * Gera na pasta `vaultsDir` os cofres organizados em listas de no máximo 100 senhas,
+ * além de separar os itens com 2FA (TOTP) e gerar o `ProtonPass.vault` unificado com grupos internos.
+ */
+export function writeOrganizedGeoTpVaults(
+  items: VaultCredentialRecord[],
+  vaultsDir: string,
+  masterPassword: string
+): string[] {
+  fs.mkdirSync(vaultsDir, { recursive: true });
+
+  // Remove arquivos .vault antigos para manter o diretório limpo
+  for (const existing of fs.readdirSync(vaultsDir)) {
+    if (existing.endsWith('.vault')) {
+      fs.rmSync(path.join(vaultsDir, existing), { force: true });
+    }
+  }
+
+  const sortedAll = [...items].sort((a, b) =>
+    (a.title || '').localeCompare(b.title || '', undefined, { sensitivity: 'base' })
+  );
+
+  const summary: string[] = [];
+
+  // 1. Cofre unificado ProtonPass.vault (possui menu interno de grupos <= 100 + 2FA)
+  const unifiedBuf = buildGeoTpVaultFile(sortedAll, masterPassword);
+  fs.writeFileSync(path.join(vaultsDir, 'ProtonPass.vault'), unifiedBuf, { mode: 0o644 });
+  summary.push(`ProtonPass.vault (${sortedAll.length} credenciais c/ menu de grupos)`);
+
+  // 2. Cofre dedicado apenas para contas com 2FA (TOTP)
+  const totpItems = sortedAll.filter((it) => Boolean(it.totpSecret && it.totpSecret.trim()));
+  let prefixIdx = 1;
+  if (totpItems.length > 0) {
+    const fileName = `${String(prefixIdx).padStart(2, '0')}_2FA.vault`;
+    prefixIdx++;
+    const buf = buildGeoTpVaultFile(totpItems, masterPassword);
+    fs.writeFileSync(path.join(vaultsDir, fileName), buf, { mode: 0o644 });
+    summary.push(`${fileName} (${totpItems.length} códigos 2FA)`);
+  }
+
+  // 3. Agrupa por Vault do Proton Pass e divide listas > 100 em blocos de até 100 senhas
+  const byVault = new Map<string, VaultCredentialRecord[]>();
+  for (const it of sortedAll) {
+    const vName = (it.vaultId || 'Default').replace(/[^a-zA-Z0-9_-]/g, '_') || 'Default';
+    const arr = byVault.get(vName) ?? [];
+    arr.push(it);
+    byVault.set(vName, arr);
+  }
+
+  // Ordena cofres menores primeiro (ex: Detran antes de Personal)
+  const vaultEntries = [...byVault.entries()].sort((a, b) => a[1].length - b[1].length);
+
+  for (const [vName, vItems] of vaultEntries) {
+    if (vItems.length <= 100) {
+      const fileName = `${String(prefixIdx).padStart(2, '0')}_${vName}.vault`;
+      prefixIdx++;
+      const buf = buildGeoTpVaultFile(vItems, masterPassword);
+      fs.writeFileSync(path.join(vaultsDir, fileName), buf, { mode: 0o644 });
+      summary.push(`${fileName} (${vItems.length} credenciais)`);
+    } else {
+      const numChunks = Math.ceil(vItems.length / 100);
+      const chunkSize = Math.ceil(vItems.length / numChunks);
+      for (let c = 0; c < numChunks; c++) {
+        const slice = vItems.slice(c * chunkSize, (c + 1) * chunkSize);
+        if (slice.length === 0) continue;
+        const firstChar = (slice[0].title || 'A').trim().charAt(0).toUpperCase() || 'A';
+        const lastChar =
+          (slice[slice.length - 1].title || 'Z').trim().charAt(0).toUpperCase() || 'Z';
+        const safeRange = `${firstChar.replace(/[^A-Z0-9]/g, 'A')}-${lastChar.replace(/[^A-Z0-9]/g, 'Z')}`;
+        const fileName = `${String(prefixIdx).padStart(2, '0')}_${vName}_${safeRange}.vault`;
+        prefixIdx++;
+        const buf = buildGeoTpVaultFile(slice, masterPassword);
+        fs.writeFileSync(path.join(vaultsDir, fileName), buf, { mode: 0o644 });
+        summary.push(`${fileName} (${slice.length} credenciais, <= 100)`);
+      }
+    }
+  }
+
+  return summary;
+}
+
+/**
  * Decifra e valida o checksum SHA-256 de um ficheiro `.vault` (`geo-tp/Password-Manager`).
  */
 export function decryptGeoTpVaultFile(vaultBuffer: Buffer, masterPassword: string): {
@@ -448,6 +532,7 @@ export function decryptGeoTpVaultFile(vaultBuffer: Buffer, masterPassword: strin
     password: string;
     notes: string;
     notes2: string;
+    notes3?: string;
     link: string;
   }>;
 } {
@@ -468,7 +553,24 @@ export function decryptGeoTpVaultFile(vaultBuffer: Buffer, masterPassword: strin
     throw new Error('Checksum mismatch on decrypted .vault file');
   }
 
-  return JSON.parse(plainBuf.toString('utf8'));
+  const parsed = JSON.parse(plainBuf.toString('utf8')) as {
+    categories?: unknown[];
+    entries?: Array<Record<string, unknown>>;
+  };
+
+  return {
+    categories: parsed.categories ?? [],
+    entries: (parsed.entries ?? []).map((e, idx) => ({
+      id: typeof e.id === 'number' ? e.id : idx,
+      serviceName: String(e.serviceName ?? ''),
+      username: String(e.username ?? ''),
+      password: String(e.password ?? ''),
+      notes: String(e.notes ?? ''),
+      notes2: String(e.notes2 ?? ''),
+      notes3: String(e.notes3 ?? ''),
+      link: String(e.link ?? ''),
+    })),
+  };
 }
 
 

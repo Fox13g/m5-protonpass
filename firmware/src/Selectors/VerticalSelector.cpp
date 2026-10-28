@@ -14,7 +14,8 @@ int VerticalSelector::select(
         const std::vector<std::string>& options2,
         const std::vector<std::string>& shortcuts, 
         bool visibleMention,
-        bool handleInactivity) 
+        bool handleInactivity,
+        std::function<bool(std::vector<std::string>&)> onTick) 
 {
     int currentIndex = 0;
     int lastIndex = -1;
@@ -22,6 +23,7 @@ int VerticalSelector::select(
     char key = KEY_NONE;
     std::string searchQuery;
     std::vector<std::string> filteredOptions = options;
+    uint32_t lastTickMs = millis();
     inactivityManager.reset();
 
     while (true) {
@@ -31,8 +33,16 @@ int VerticalSelector::select(
             if (inactivityManager.getVaultIsLocked()) {return -1;}
         }
 
+        bool forceRedraw = false;
+        if (onTick && (millis() - lastTickMs >= 250)) {
+            lastTickMs = millis();
+            if (onTick(filteredOptions)) {
+                forceRedraw = true;
+            }
+        }
+
         // Display the current options and selection
-        if (lastIndex != currentIndex || lastQuerySize != searchQuery.size()) {
+        if (forceRedraw || lastIndex != currentIndex || lastQuerySize != searchQuery.size()) {
             display.topBar(searchQuery.empty() ? title : searchQuery, subMenu, searchBar);
             display.verticalSelection(filteredOptions, currentIndex, 4, options2, shortcuts, visibleMention);
             lastIndex = currentIndex;

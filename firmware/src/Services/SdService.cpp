@@ -98,9 +98,10 @@ std::vector<uint8_t> SdService::readBinaryFile(const std::string& filePath) {
 
     File file = SD.open(filePath.c_str(), FILE_READ);
     if (file) {
-        content.reserve(file.size());
-        while (file.available()) {
-            content.push_back(file.read());
+        size_t sz = file.size();
+        content.resize(sz);
+        if (sz > 0) {
+            file.read(content.data(), sz);
         }
         file.close();
     }
@@ -115,8 +116,10 @@ std::string SdService::readFile(const std::string& filePath) {
 
     File file = SD.open(filePath.c_str());
     if (file) {
-        while (file.available()) {
-            content += static_cast<char>(file.read());
+        size_t sz = file.size();
+        content.resize(sz);
+        if (sz > 0) {
+            file.read(reinterpret_cast<uint8_t*>(&content[0]), sz);
         }
         file.close();
     }

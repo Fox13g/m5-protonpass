@@ -23,7 +23,9 @@ std::vector<std::string> ModelTransformer::toStrings(const Entry& entry) {
     if (!entry.getNotes2().empty()) {
         uint8_t remSec = 0;
         std::string code = TotpService::generateCode(entry.getNotes2(), &remSec);
-        if (!code.empty()) {
+        if (code.size() == 6) {
+            totpDisplay = code.substr(0, 3) + " " + code.substr(3) + " (" + std::to_string(remSec) + "s)";
+        } else if (!code.empty()) {
             totpDisplay = code + " (" + std::to_string(remSec) + "s)";
         } else {
             totpDisplay = entry.getNotes2();
